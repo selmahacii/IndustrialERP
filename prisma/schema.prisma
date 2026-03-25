@@ -1,0 +1,614 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String
+  role          UserRole  @default(EMPLOYEE)
+  employeeId    String?   @unique
+  employee      Employee? @relation(fields: [employeeId], references: [id])
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  auditLogs     AuditLog[]
+  transactions  Transaction[]
+  inventoryMovements InventoryMovement[]
+  workOrders    WorkOrder[]
+  notifications Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  ACCOUNTANT
+  WAREHOUSE_MANAGER
+  PRODUCTION_MANAGER
+  HR_MANAGER
+  EMPLOYEE
+}
+
+
+model Employee {
+  id              String        @id @default(cuid())
+  employeeNumber  String        @unique
+  firstName       String
+  lastName        String
+  fullName        String
+  email           String        @unique
+  phone           String?
+  address         String?
+  department      Department
+  position        String
+  hireDate        DateTime
+  terminationDate DateTime?
+  salary          Float         // Salaire de base mensuel en DZD
+  bankAccount     String?
+  status          EmployeeStatus @default(ACTIVE)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User?
+  timeEntries     TimeEntry[]
+  payrolls        Payroll[]
+  workOrders      WorkOrder[]
+
+  @@index([department])
+  @@index([status])
+}
+
+enum Department {
+  PRODUCTION
+  WAREHOUSE
+  FINANCE
+  HR
+  SALES
+  PROCUREMENT
+  QUALITY
+  MAINTENANCE
+  LOGISTICS
+  ADMINISTRATION
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+}
+
+// Pointages
+model TimeEntry {
+  id          String        @id @default(cuid())
+  employeeId  String
+  employee    Employee      @relation(fields: [employeeId], references: [id])
+  date        DateTime
+  clockIn     DateTime
+  clockOut    DateTime?
+  overtimeHours Float       @default(0)
+  status      TimeEntryStatus @default(PRESENT)
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([employeeId])
+}
+
+enum TimeEntryStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EARLY_DEPARTURE
+  VACATION
+  SICK_LEAVE
+}
+
+// Paie
+model Payroll {
+  id              String      @id @default(cuid())
+  employeeId      String
+  employee        Employee    @relation(fields: [employeeId], references: [id])
+  periodStart     DateTime
+  periodEnd       DateTime
+  baseSalary      Float       // Salaire de base
+  overtimePay     Float       @default(0)
+  bonuses         Float       @default(0)
+  deductions      Float       @default(0)
+  netSalary       Float       // Salaire net
+  status          PayrollStatus @default(PENDING)
+  paidAt          DateTime?
+  paymentMethod   String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([employeeId, periodStart, periodEnd])
+  @@index([periodStart, periodEnd])
+  @@index([status])
+}
+
+enum PayrollStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products    Product[]
+}
+
+model Product {
+  id              String        @id @default(cuid())
+  sku             String        @unique
+  name            String
+  description     String?
+  categoryId      String?
+  category        Category?     @relation(fields: [categoryId], references: [id])
+  type            ProductType
+  unit            String        // kg, unit, m, l, etc.
+  unitPrice       Float         // Prix unitaire en DZD
+  costPrice       Float         // Coût de revient
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  inventory       Inventory?
+  inventoryMovements InventoryMovement[]
+  workOrderItems  WorkOrderItem[]
+  bomComponents   BOMComponent[] @relation("ComponentProduct")
+  boms            BOM[]
+  workOrders      WorkOrder[]
+  purchaseOrderLines PurchaseOrderLine[]
+
+  @@index([sku])
+  @@index([type])
+  @@index([categoryId])
+}
+
+enum ProductType {
+  RAW_MATERIAL     // Matière première
+  WORK_IN_PROGRESS // Encours de production
+  FINISHED_GOOD    // Produit fini
+  CONSUMABLE       // Consommable
+}
+
+model Inventory {
+  id              String    @id @default(cuid())
+  productId       String    @unique
+  product         Product   @relation(fields: [productId], references: [id])
+  quantity        Float     @default(0)
+  reservedQty     Float     @default(0)  // Quantité réservée
+  minStockLevel   Float     @default(0)  // Seuil minimum d'alerte
+  maxStockLevel   Float?    // Seuil maximum
+  reorderPoint    Float?    // Point de commande
+  location        String?   // Emplacement dans l'entrepôt
+  lastRestockedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([quantity])
+}
+
+model InventoryMovement {
+  id              String              @id @default(cuid())
+  productId       String
+  product         Product             @relation(fields: [productId], references: [id])
+  type            MovementType
+  quantity        Float
+  previousQty     Float
+  newQty          Float
+  referenceType   String?   // WORK_ORDER, PURCHASE_ORDER, SALE, ADJUSTMENT
+  referenceId     String?
+  notes           String?
+  userId          String
+  user            User                @relation(fields: [userId], references: [id])
+  createdAt       DateTime            @default(now())
+
+  @@index([productId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+enum MovementType {
+  IN           // Entrée
+  OUT          // Sortie
+  TRANSFER     // Transfert
+  ADJUSTMENT   // Ajustement
+  RESERVATION  // Réservation
+  RELEASE      // Libération réservation
+}
+
+
+// Nomenclature (Bill of Materials)
+model BOM {
+  id              String        @id @default(cuid())
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  version         String        @default("1.0")
+  isActive        Boolean       @default(true)
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  components      BOMComponent[]
+
+  @@unique([productId, version])
+}
+
+model BOMComponent {
+  id              String    @id @default(cuid())
+  bomId           String
+  bom             BOM       @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product   @relation("ComponentProduct", fields: [productId], references: [id])
+  quantity        Float     // Quantité nécessaire
+  unit            String
+
+  @@unique([bomId, productId])
+}
+
+// Work Order (Bon de travail)
+model WorkOrder {
+  id              String            @id @default(cuid())
+  orderNumber     String            @unique
+  productId       String
+  product         Product           @relation(fields: [productId], references: [id])
+  quantity        Float             // Quantité à produire
+  completedQty    Float             @default(0)
+  status          WorkOrderStatus   @default(DRAFT)
+  priority        Priority          @default(MEDIUM)
+  scheduledStart  DateTime?
+  scheduledEnd    DateTime?
+  actualStart     DateTime?
+  actualEnd       DateTime?
+  assignedToId    String?           // Employé assigné
+  assignedTo      Employee?         @relation(fields: [assignedToId], references: [id])
+  notes           String?
+  createdById     String
+  createdBy       User              @relation(fields: [createdById], references: [id])
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  steps           WorkOrderStep[]
+  items           WorkOrderItem[]
+
+  @@index([status])
+  @@index([scheduledStart])
+  @@index([priority])
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  PLANNED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model WorkOrderStep {
+  id            String          @id @default(cuid())
+  workOrderId   String
+  workOrder     WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  stepNumber    Int
+  name          String
+  description   String?
+  status        StepStatus      @default(PENDING)
+  estimatedTime Float?          // en heures
+  actualTime    Float?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  notes         String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([workOrderId, stepNumber])
+  @@index([status])
+}
+
+enum StepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+  FAILED
+}
+
+model WorkOrderItem {
+  id            String      @id @default(cuid())
+  workOrderId   String
+  workOrder     WorkOrder   @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+  quantity      Float
+  type          ItemType
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@index([workOrderId])
+  @@index([productId])
+}
+
+enum ItemType {
+  INPUT       // Matière première utilisée
+  OUTPUT      // Produit fabriqué
+  WASTE       // Déchet
+}
+
+
+model Account {
+  id          String        @id @default(cuid())
+  code        String        @unique
+  name        String
+  type        AccountType
+  parentCode  String?
+  description String?
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  transactions Transaction[] @relation("AccountTransactions")
+  journalLines JournalLine[]
+
+  @@index([code])
+  @@index([type])
+}
+
+enum AccountType {
+  ASSET       // Actif
+  LIABILITY   // Passif
+  EQUITY      // Capitaux propres
+  REVENUE     // Revenus
+  EXPENSE     // Dépenses
+}
+
+model Transaction {
+  id              String          @id @default(cuid())
+  transactionNumber String        @unique
+  reference       String?         // Référence externe
+  accountId       String
+  account         Account         @relation("AccountTransactions", fields: [accountId], references: [id])
+  type            TransactionType
+  amount          Float           // Montant en DZD
+  description     String?
+  category        String?
+  transactionDate DateTime
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  status          TransactionStatus @default(PENDING)
+  reconciledAt    DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  auditLogs       AuditLog[]
+
+  @@index([transactionDate])
+  @@index([type])
+  @@index([status])
+  @@index([accountId])
+}
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+}
+
+enum TransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  RECONCILED
+  CANCELLED
+}
+
+// Journal comptable
+model JournalEntry {
+  id              String        @id @default(cuid())
+  entryNumber     String        @unique
+  date            DateTime
+  description     String
+  reference       String?
+  status          JournalStatus @default(DRAFT)
+  postedAt        DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  lines           JournalLine[]
+
+  @@index([date])
+  @@index([status])
+}
+
+model JournalLine {
+  id              String        @id @default(cuid())
+  journalEntryId  String
+  journalEntry    JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId       String
+  account         Account       @relation(fields: [accountId], references: [id])
+  debit           Float         @default(0)
+  credit          Float         @default(0)
+  description     String?
+  createdAt       DateTime      @default(now())
+
+  @@index([accountId])
+}
+
+enum JournalStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+
+model Supplier {
+  id              String        @id @default(cuid())
+  code            String        @unique
+  name            String
+  contactName     String?
+  email           String?
+  phone           String?
+  address         String?
+  taxId           String?
+  paymentTerms    Int?          // Jours de paiement
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  purchaseOrders  PurchaseOrder[]
+
+  @@index([name])
+}
+
+model PurchaseOrder {
+  id              String            @id @default(cuid())
+  orderNumber     String            @unique
+  supplierId      String
+  supplier        Supplier          @relation(fields: [supplierId], references: [id])
+  orderDate       DateTime
+  expectedDate    DateTime?
+  status          PurchaseStatus    @default(DRAFT)
+  totalAmount     Float             @default(0)
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  lines           PurchaseOrderLine[]
+
+  @@index([status])
+  @@index([orderDate])
+}
+
+enum PurchaseStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  RECEIVED
+  PARTIAL
+  CANCELLED
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  quantity        Float
+  unitPrice       Float
+  receivedQty     Float         @default(0)
+  createdAt       DateTime      @default(now())
+}
+
+
+model AuditLog {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  action          AuditAction
+  entityType      String        // Product, Transaction, Inventory, WorkOrder, etc.
+  entityId        String
+  oldValue        String?       // JSON des anciennes valeurs
+  newValue        String?       // JSON des nouvelles valeurs
+  transactionId   String?
+  transaction     Transaction?  @relation(fields: [transactionId], references: [id])
+  ipAddress       String?
+  userAgent       String?
+  description     String?
+  createdAt       DateTime      @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  LOGIN
+  LOGOUT
+  VIEW
+  EXPORT
+  PRINT
+}
+
+
+// PARAMÈTRES SYSTÈME
+
+
+model Setting {
+  id          String    @id @default(cuid())
+  key         String    @unique
+  value       String    // JSON value
+  description String?
+  category    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([key])
+  @@index([category])
+}
+
+
+// NOTIFICATIONS
+
+
+model Notification {
+  id          String            @id @default(cuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id])
+  title       String
+  message     String
+  type        NotificationType
+  isRead      Boolean           @default(false)
+  link        String?
+  createdAt   DateTime          @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+  STOCK_ALERT
+  PRODUCTION_ALERT
+  FINANCE_ALERT
+}
+
+
